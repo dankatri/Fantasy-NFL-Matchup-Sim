@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fantasy NFL Matchup Simulator</title>
+<meta name="description" content="Enter an ESPN fantasy football league ID to see how every team would have fared against every other team, every week." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>" />
+</head>
+<body>
+
+<header class="masthead">
+  <div class="shell">
+    <h1><span class="ball">🏈</span> Fantasy Matchup Simulator</h1>
+    <p class="tagline">
+      Your fantasy record only tells you who you happened to play. This replays every week against
+      <strong>every team in your league</strong> &mdash; so you can finally prove you were robbed.
+    </p>
+  </div>
+</header>
+
+<main class="shell">
+
+  <section class="lookup">
+    <form id="league-form" autocomplete="off">
+      <div class="field">
+        <label for="leagueId">ESPN league ID</label>
+        <input id="leagueId" name="leagueId" type="text" inputmode="numeric" placeholder="e.g. 203836968" required />
+      </div>
+      <div class="field season">
+        <label for="season">Season</label>
+        <select id="season" name="season"></select>
+      </div>
+      <div class="actions">
+        <button id="submit" type="submit" class="primary">Simulate league</button>
+        <button id="demo" type="button" class="ghost">Try a demo league</button>
+      </div>
+    </form>
+
+    <details class="help">
+      <summary>Where do I find my league ID? &nbsp;·&nbsp; Why does it say my league is private?</summary>
+      <div class="help-body">
+        <p>
+          Open your league on <code>fantasy.espn.com</code>. The URL looks like
+          <code>…/football/league?leagueId=<strong>203836968</strong>&amp;seasonId=2024</code> &mdash; the bold number is your league ID.
+        </p>
+        <p>
+          This site runs entirely in your browser with no server, so it can only read leagues ESPN serves publicly.
+          If you get a privacy error, a league manager can switch
+          <em>League Settings → Basic Settings → Visibility</em> to <strong>Public</strong>. Nothing you enter is stored or sent anywhere except ESPN.
+        </p>
+      </div>
+    </details>
+  </section>
+
+  <div id="status" class="status" hidden></div>
+
+  <section id="results" hidden>
+    <div class="league-head">
+      <h2 id="league-name"></h2>
+      <p id="league-meta" class="league-meta"></p>
+    </div>
+
+    <div id="tabs" class="tabs" role="tablist">
+      <button class="tab active" role="tab" data-tab="standings" aria-selected="true">Standings &amp; luck</button>
+      <button class="tab" role="tab" data-tab="grid" aria-selected="false">Week-by-week grid</button>
+      <button class="tab" role="tab" data-tab="swap" aria-selected="false">Schedule swap</button>
+      <button class="tab" role="tab" data-tab="power" aria-selected="false">Power rankings</button>
+    </div>
+
+    <div id="panel-standings" class="panel" role="tabpanel"></div>
+    <div id="panel-grid" class="panel" role="tabpanel" hidden></div>
+    <div id="panel-swap" class="panel" role="tabpanel" hidden></div>
+    <div id="panel-power" class="panel" role="tabpanel" hidden></div>
+  </section>
+
+</main>
+
+<footer class="shell site-footer">
+  <p>
+    Not affiliated with ESPN or the NFL. Data is fetched live from ESPN's public fantasy API and never leaves your browser.
+  </p>
+</footer>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

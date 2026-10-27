@@ -78,19 +78,34 @@ function table(headers, { stickyFirst = false } = {}) {
 function teamCell(row) {
   const td = document.createElement('td');
   td.className = 'team-cell';
+  td.title = row.team.owner ? `${row.team.name} — ${row.team.owner}` : row.team.name;
+
+  const inner = document.createElement('div');
+  inner.className = 'team-inner';
+
   const dot = document.createElement('span');
   dot.className = 'team-dot';
   dot.style.background = colors.get(row.id);
+
   const name = document.createElement('span');
   name.className = 'team-name';
   name.textContent = row.team.name;
-  td.append(dot, name);
+
+  // Shown instead of the full name on narrow screens so the sticky column stays small.
+  const abbrev = document.createElement('span');
+  abbrev.className = 'team-abbrev';
+  abbrev.textContent = row.team.abbrev;
+
+  inner.append(dot, name, abbrev);
+
   if (row.team.owner) {
     const owner = document.createElement('span');
     owner.className = 'team-owner';
     owner.textContent = row.team.owner;
-    td.appendChild(owner);
+    inner.appendChild(owner);
   }
+
+  td.appendChild(inner);
   return td;
 }
 
@@ -120,7 +135,7 @@ function renderStandings() {
   );
 
   const { wrap, tbody } = table([
-    { label: '#', title: 'True rank from all-play record' },
+    { label: '#', className: 'col-rank', title: 'True rank from all-play record' },
     { label: 'Team', className: 'col-team' },
     { label: 'Actual', title: 'Record against the scheduled opponent' },
     { label: 'All-play', title: 'Record versus every team, every week' },
@@ -207,7 +222,11 @@ function renderGrid() {
     )
   );
 
-  const headers = ['Team', ...weeks.map((w) => ({ label: `W${w}`, className: 'week-col' })), { label: 'Total', className: 'total-col' }];
+  const headers = [
+    { label: 'Team', className: 'col-team' },
+    ...weeks.map((w) => ({ label: `W${w}`, className: 'week-col' })),
+    { label: 'Total', className: 'total-col' },
+  ];
   const { wrap, tbody } = table(headers, { stickyFirst: true });
 
   for (const row of analysis.rows) {
@@ -285,10 +304,10 @@ function renderWeekBreakdown() {
 
     const ranked = [...weekData.scores.entries()].sort((a, b) => b[1] - a[1]);
     const { wrap, tbody } = table([
-      '#',
+      { label: '#', className: 'col-rank' },
       { label: 'Team', className: 'col-team' },
       'Score',
-      { label: 'Opponent', className: 'col-team' },
+      { label: 'Opponent', className: 'text-left' },
       'Actual',
       'All-play this week',
     ]);
@@ -306,7 +325,7 @@ function renderWeekBreakdown() {
       tr.appendChild(cell('td', String(idx + 1), { className: 'rank' }));
       tr.appendChild(teamCell(row));
       tr.appendChild(cell('td', num(score, 2), { className: 'mono' }));
-      tr.appendChild(cell('td', oppRow ? `${oppRow.team.name} (${num(oppScore, 2)})` : '—', { className: 'col-team' }));
+      tr.appendChild(cell('td', oppRow ? `${oppRow.team.name} (${num(oppScore, 2)})` : '—', { className: 'text-left' }));
       tr.appendChild(
         cell('td', outcome, { className: `mono ${outcome === 'WIN' ? 'good' : outcome === 'LOSS' ? 'bad' : 'neutral'}` })
       );
@@ -340,7 +359,7 @@ function renderSwap() {
   );
 
   const headers = [
-    'Team',
+    { label: 'Team', className: 'col-team' },
     ...analysis.rows.map((r) => ({ label: r.team.abbrev, title: `${r.team.name}'s schedule`, className: 'swap-col' })),
     { label: 'Avg W', className: 'total-col' },
     { label: 'Range', className: 'total-col' },
@@ -401,7 +420,7 @@ function renderScheduleDifficulty() {
   const spread = (v) => (hi - lo < 0.05 ? 0.5 : (v - lo) / (hi - lo));
 
   const { wrap, tbody } = table([
-    '#',
+    { label: '#', className: 'col-rank' },
     { label: 'Schedule owner', className: 'col-team' },
     { label: 'Avg wins', title: 'Average wins a league-average team would get on this schedule' },
     { label: 'Their actual', title: 'What the schedule owner actually did with it' },
@@ -457,7 +476,7 @@ function renderPower() {
   });
 
   const { wrap, tbody } = table([
-    'Team',
+    { label: 'Team', className: 'col-team' },
     ...analysis.weeks.map((w) => ({ label: `W${w}`, className: 'week-col' })),
     { label: 'Final', className: 'total-col' },
   ], { stickyFirst: true });

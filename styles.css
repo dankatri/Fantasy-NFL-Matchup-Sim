@@ -222,12 +222,12 @@ th {
 }
 
 th:first-child, td:first-child { text-align: left; }
-.col-team { text-align: left; }
+.col-team, .text-left { text-align: left; }
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: #1b2733; }
 
-.sticky-first th:first-child,
-.sticky-first td:first-child {
+.sticky-first th.col-team,
+.sticky-first td.team-cell {
   position: sticky;
   left: 0;
   z-index: 2;
@@ -235,8 +235,8 @@ tbody tr:hover td { background: #1b2733; }
   border-right: 1px solid var(--border);
 }
 
-.sticky-first th:first-child { z-index: 4; background: var(--bg-raised-2); }
-.sticky-first tbody tr:hover td:first-child { background: #1b2733; }
+.sticky-first th.col-team { z-index: 4; background: var(--bg-raised-2); }
+.sticky-first tbody tr:hover td.team-cell { background: #1b2733; }
 
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: .86rem; }
 .rank { color: var(--text-faint); font-family: var(--mono); width: 2.5rem; }
@@ -246,10 +246,33 @@ tbody tr:hover td { background: #1b2733; }
 .neutral { color: var(--text-dim); }
 .total-col { border-left: 1px solid var(--border); font-weight: 600; }
 
-.team-cell { display: flex; align-items: center; gap: .5rem; min-width: 190px; }
+.team-inner {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-width: 11.5rem;
+}
+
 .team-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
-.team-name { font-weight: 600; }
-.team-owner { color: var(--text-faint); font-size: .78rem; margin-left: .15rem; }
+
+.team-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.team-abbrev { display: none; font-weight: 600; font-family: var(--mono); }
+
+.team-owner {
+  color: var(--text-faint);
+  font-size: .78rem;
+  margin-left: .15rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .grid-cell { position: relative; cursor: help; }
 
@@ -340,11 +363,45 @@ svg.dimmed .series.active { opacity: 1; }
 .site-footer { margin: 3.5rem 0 2.5rem; color: var(--text-faint); font-size: .83rem; }
 .site-footer p { margin: 0; }
 
+/* Narrow screens: the team column must not crowd out the data columns. */
+@media (max-width: 760px) {
+  th, td { padding: .5rem .55rem; }
+  .mono { font-size: .82rem; }
+
+  .team-inner { min-width: 7rem; max-width: 8.5rem; }
+  .team-owner { display: none; }
+
+  /* Wide matrix tables keep a frozen first column, so shrink it to the abbreviation. */
+  .sticky-first .team-inner { min-width: 0; max-width: none; }
+  .sticky-first .team-name { display: none; }
+  .sticky-first .team-abbrev { display: inline; }
+
+  /* The rank is already implied by row order, and the space is better spent on data. */
+  .col-rank, .rank { display: none; }
+
+  /* Freeze the team column everywhere so rows stay identifiable while scrolling. */
+  .table-wrap th.col-team,
+  .table-wrap td.team-cell {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--bg-raised);
+    border-right: 1px solid var(--border);
+  }
+
+  .table-wrap th.col-team { z-index: 4; background: var(--bg-raised-2); }
+  .table-wrap tbody tr:hover td.team-cell { background: #1b2733; }
+
+  .week-col, .swap-col { font-size: .7rem; }
+}
+
 @media (max-width: 640px) {
   .shell { width: calc(100% - 1.75rem); }
   .masthead { padding-top: 2rem; }
   .actions { width: 100%; }
   .actions button { flex: 1 1 auto; }
+  .subsection-head { align-items: flex-start; flex-direction: column; gap: .5rem; }
+  .week-select { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

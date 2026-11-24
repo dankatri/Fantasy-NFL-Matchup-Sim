@@ -1,6 +1,6 @@
-import { loadLeague, loadLeagueRosters, EspnError } from './espn.js';
+import { loadLeague, loadLeagueRosters, EspnError } from './espn.js?v=2';
 import { buildAnalysis, formatRecord } from './sim.js';
-import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js';
+import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js?v=2';
 import { renderRankChart, teamColor } from './chart.js';
 
 const DEFAULT_SEASON = 2026;

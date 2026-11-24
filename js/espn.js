@@ -1,5 +1,17 @@
 const BASE = 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl';
 const VIEWS = ['mTeam', 'mSettings', 'mMatchupScore'];
+const BENCH_SLOT = 20;
+const IR_SLOT = 21;
+const PRIOR_GAMES = 4;
+
+const POSITION_NAMES = {
+  1: 'QB',
+  2: 'RB',
+  3: 'WR',
+  4: 'TE',
+  5: 'K',
+  16: 'D/ST',
+};
 
 export class EspnError extends Error {
   constructor(message, hint) {
@@ -197,4 +209,111 @@ export function normalize(raw, leagueId, season) {
 export async function loadLeague(leagueId, season) {
   const raw = await fetchLeague(leagueId, season);
   return normalize(raw, leagueId, season);
+}
+
+async function fetchRosterWeek(leagueId, season, week) {
+  const qs = `view=mRoster&scoringPeriodId=${encodeURIComponent(week)}`;
+  const currentUrl = `${BASE}/seasons/${season}/segments/0/leagues/${leagueId}?${qs}`;
+  const historyUrl = `${BASE}/leagueHistory/${leagueId}?seasonId=${season}&${qs}`;
+
+  try {
+    const data = await readJson(currentUrl);
+    if (data) return data;
+  } catch (err) {
+    if (!err.notFound) throw err;
+  }
+
+  try {
+    const data = await readJson(historyUrl);
+    if (data) return data;
+  } catch (err) {
+    if (!err.notFound) throw err;
+  }
+
+  return null;
+}
+
+/**
+ * Blend a player's actual healthy PPG with ESPN's season projected PPG so
+ * players who suffered early/season-ending injuries still carry their true
+ * expected weekly value.
+ */
+export function estimateExpectedPPG(player) {
+  const stats = player?.stats || [];
+  const sAct = stats.find((s) => s.scoringPeriodId === 0 && s.statSourceId === 0 && s.statSplitTypeId === 0);
+  const sProj = stats.find((s) => s.scoringPeriodId === 0 && s.statSourceId === 1 && s.statSplitTypeId === 0);
+
+  const actAvg = Number(sAct?.appliedAverage) || 0;
+  const projAvg = Number(sProj?.appliedAverage) || 0;
+  const rawGp = Number(sAct?.stats?.['210']) || 0;
+  const gp = rawGp > 0 ? rawGp : actAvg > 0 ? Math.round((Number(sAct?.appliedTotal) || 0) / actAvg) : 0;
+
+  if (gp > 0 && projAvg > 0) return (gp * actAvg + PRIOR_GAMES * projAvg) / (gp + PRIOR_GAMES);
+  if (gp > 0) return actAvg;
+  return projAvg;
+}
+
+/**
+ * Normalize per-week raw mRoster payloads into a compact Map<week, Map<teamId, entries[]>>.
+ *
+ * ESPN only attaches a week's actual stat record (scoringPeriodId === week, statSourceId === 0)
+ * when the player's NFL team actually had a game that week — bye weeks omit it, which avoids
+ * false positives even when a player changed NFL teams in a later season.
+ */
+export function normalizeRosters(rawByWeek, teamIds) {
+  const allowed = teamIds ? new Set(teamIds) : null;
+  const byWeek = new Map();
+
+  for (const [week, raw] of rawByWeek) {
+    const teamMap = new Map();
+    for (const team of raw?.teams || []) {
+      if (allowed && !allowed.has(team.id)) continue;
+      const entries = [];
+      for (const entry of team.roster?.entries || []) {
+        const player = entry.playerPoolEntry?.player;
+        if (!player) continue;
+
+        const slot = Number(entry.lineupSlotId);
+        const isIR = slot === IR_SLOT;
+        const isStarter = slot !== BENCH_SLOT && !isIR;
+
+        const wAct = (player.stats || []).find((s) => s.scoringPeriodId === week && s.statSourceId === 0);
+        const played = (Number(wAct?.stats?.['210']) || 0) >= 1 || (Number(wAct?.appliedTotal) || 0) !== 0;
+        const weekProTeamId = wAct?.proTeamId ?? player.proTeamId ?? 0;
+        const missed = Boolean(wAct) && !played && (weekProTeamId > 0 || isIR);
+
+        entries.push({
+          playerId: player.id,
+          name: player.fullName || `Player ${player.id}`,
+          position: POSITION_NAMES[player.defaultPositionId] || 'FLEX',
+          lineupSlotId: slot,
+          eligibleSlots: Array.isArray(player.eligibleSlots) ? player.eligibleSlots : [],
+          isStarter,
+          isIR,
+          played,
+          missed,
+          expectedPPG: Math.max(0, estimateExpectedPPG(player)),
+        });
+      }
+      teamMap.set(team.id, entries);
+    }
+    byWeek.set(week, teamMap);
+  }
+
+  return byWeek;
+}
+
+/** Fetch and normalize weekly rosters for all completed regular-season weeks. */
+export async function loadLeagueRosters(leagueId, season, weeks, teamIds) {
+  const pairs = await Promise.all(
+    weeks.map(async (week) => [week, await fetchRosterWeek(leagueId, season, week)])
+  );
+  const rawByWeek = new Map(pairs.filter(([, data]) => Boolean(data)));
+  if (!rawByWeek.size) {
+    throw new EspnError(
+      'Weekly roster data is unavailable for this season.',
+      'ESPN may not have archived weekly rosters for older seasons.'
+    );
+  }
+  return normalizeRosters(rawByWeek, teamIds);
 }

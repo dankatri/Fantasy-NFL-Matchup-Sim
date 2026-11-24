@@ -2,8 +2,9 @@
  * Edge-case tests for the normalizer and simulator.
  * Run with: node tests/sim.test.js   (no dependencies)
  */
-import { normalize, EspnError } from '../js/espn.js';
+import { normalize, normalizeRosters, estimateExpectedPPG, EspnError } from '../js/espn.js';
 import { buildAnalysis, formatRecord } from '../js/sim.js';
+import { buildInjuryAnalysis, formatWeekRanges } from '../js/injuries.js';
 
 let failures = 0;
 let current = '';
@@ -134,6 +135,159 @@ suite('Error handling');
   check('a season with no scores raises EspnError', throwsEspnError(() => normalize(payload(named([1, 2]), [game(1, 1, 0, 2, 0)], 1), 1, 2024)));
   check('a league with no teams raises EspnError', throwsEspnError(() => normalize({ settings: {}, teams: [], schedule: [] }, 1, 2024)));
   check('playoff-only data raises EspnError', throwsEspnError(() => normalize(payload(named([1, 2]), [game(1, 1, 10, 2, 9, 'WINNERS_BRACKET')], 1), 1, 2024)));
+}
+
+/** Build a minimal ESPN roster entry for injury tests. */
+function rosterEntry({
+  id,
+  name,
+  pos = 2,
+  slot = 2,
+  eligibleSlots = [2, 23, 20, 21],
+  week,
+  played = true,
+  onBye = false,
+  proTeamId = 10,
+  weekProTeamId = 10,
+  seasonAvg = 12,
+  seasonGp = 10,
+  projAvg = 12,
+}) {
+  const stats = [];
+  if (seasonGp > 0) {
+    stats.push({
+      scoringPeriodId: 0,
+      statSourceId: 0,
+      statSplitTypeId: 0,
+      appliedAverage: seasonAvg,
+      appliedTotal: seasonAvg * seasonGp,
+      stats: { '210': seasonGp },
+    });
+  }
+  if (projAvg > 0) {
+    stats.push({
+      scoringPeriodId: 0,
+      statSourceId: 1,
+      statSplitTypeId: 0,
+      appliedAverage: projAvg,
+      appliedTotal: projAvg * 17,
+    });
+  }
+  if (!onBye) {
+    stats.push({
+      scoringPeriodId: week,
+      statSourceId: 0,
+      statSplitTypeId: 1,
+      proTeamId: weekProTeamId,
+      appliedTotal: played ? seasonAvg : 0,
+      stats: played ? { '210': 1 } : {},
+    });
+  }
+  return {
+    lineupSlotId: slot,
+    playerPoolEntry: {
+      player: {
+        id,
+        fullName: name,
+        defaultPositionId: pos,
+        proTeamId,
+        eligibleSlots,
+        stats,
+      },
+    },
+  };
+}
+
+suite('Injury impact and expected lost points');
+{
+  const league = normalize(payload(named([1, 2]), [game(1, 1, 110, 2, 95)], 1), 1, 2024);
+
+  // Team 1 loses a top-10 QB (22 PPG) replaced by a backup QB (14 PPG) -> 8.0 lost pts.
+  // Also has a healthy player on bye (omitted week stat) who must NOT be counted as injured.
+  // Team 2 loses a mid-tier RB (11 PPG) replaced by a 10 PPG RB -> 1.0 lost pt,
+  // plus a bench WR (7 PPG) who wouldn't have started over their 12 PPG WR -> 0.0 lost pts.
+  const rawW1 = {
+    teams: [
+      {
+        id: 1,
+        roster: {
+          entries: [
+            rosterEntry({ id: 101, name: 'Star QB', pos: 1, slot: 21, eligibleSlots: [0, 20, 21], week: 1, played: false, seasonAvg: 22, projAvg: 22 }),
+            rosterEntry({ id: 102, name: 'Backup QB', pos: 1, slot: 0, eligibleSlots: [0, 20, 21], week: 1, played: true, seasonAvg: 14, projAvg: 14 }),
+            rosterEntry({ id: 103, name: 'Bye RB', pos: 2, slot: 20, eligibleSlots: [2, 23, 20, 21], week: 1, played: false, onBye: true, seasonAvg: 18, projAvg: 18 }),
+          ],
+        },
+      },
+      {
+        id: 2,
+        roster: {
+          entries: [
+            rosterEntry({ id: 201, name: 'Mid RB', pos: 2, slot: 20, eligibleSlots: [2, 23, 20, 21], week: 1, played: false, seasonAvg: 11, projAvg: 11 }),
+            rosterEntry({ id: 202, name: 'Fill-in RB', pos: 2, slot: 2, eligibleSlots: [2, 23, 20, 21], week: 1, played: true, seasonAvg: 10, projAvg: 10 }),
+            rosterEntry({ id: 203, name: 'Bench WR', pos: 3, slot: 20, eligibleSlots: [4, 23, 20, 21], week: 1, played: false, seasonAvg: 7, projAvg: 7 }),
+            rosterEntry({ id: 204, name: 'Starter WR', pos: 3, slot: 4, eligibleSlots: [4, 23, 20, 21], week: 1, played: true, seasonAvg: 12, projAvg: 12 }),
+          ],
+        },
+      },
+    ],
+  };
+
+  const rosters = normalizeRosters(new Map([[1, rawW1]]), [1, 2]);
+  const inj = buildInjuryAnalysis(league, rosters);
+  const t1 = inj.rowsById.get(1);
+  const t2 = inj.rowsById.get(2);
+
+  check('bye-week players are excluded from missed games', t1.missedWeeks === 1, String(t1.missedWeeks));
+  check('losing a top-10 QB costs 8.0 expected points above backup', Math.abs(t1.netLostPts - 8) < 1e-9, String(t1.netLostPts));
+  check('team with more raw injuries but lower impact ranks below star-QB loss', inj.rows[0].id === 1 && t2.missedWeeks === 2);
+  check('bench-depth injury counts as missed but adds 0 lost lineup points', t2.impactWeeks === 1 && Math.abs(t2.netLostPts - 1) < 1e-9, String(t2.netLostPts));
+}
+
+suite('Injury edge cases: multiple same-slot injuries, started while out, 0-game projection');
+{
+  const league = normalize(payload(named([1, 2]), [game(1, 1, 80, 2, 100)], 1), 1, 2024);
+
+  // Team 1 has 2 injured RBs on bench/IR (18 PPG and 15 PPG) and only ONE RB starter slot (10 PPG).
+  // Only the 18 PPG RB should claim the 10 PPG replacement (+8.0); the 15 PPG RB cannot reuse that slot.
+  // Team 2 leaves an injured 16 PPG WR in a starting slot -> full 16.0 lost points.
+  const rawW1 = {
+    teams: [
+      {
+        id: 1,
+        roster: {
+          entries: [
+            rosterEntry({ id: 301, name: 'RB1 Out', pos: 2, slot: 21, eligibleSlots: [2, 20, 21], week: 1, played: false, seasonGp: 0, projAvg: 18 }),
+            rosterEntry({ id: 302, name: 'RB2 Out', pos: 2, slot: 20, eligibleSlots: [2, 20, 21], week: 1, played: false, seasonAvg: 15, projAvg: 15 }),
+            rosterEntry({ id: 303, name: 'RB3 Starter', pos: 2, slot: 2, eligibleSlots: [2, 20, 21], week: 1, played: true, seasonAvg: 10, projAvg: 10 }),
+          ],
+        },
+      },
+      {
+        id: 2,
+        roster: {
+          entries: [
+            rosterEntry({ id: 401, name: 'Started Out WR', pos: 3, slot: 4, eligibleSlots: [4, 20, 21], week: 1, played: false, seasonAvg: 16, projAvg: 16 }),
+          ],
+        },
+      },
+    ],
+  };
+
+  const rosters = normalizeRosters(new Map([[1, rawW1]]), [1, 2]);
+  const inj = buildInjuryAnalysis(league, rosters);
+  const t1 = inj.rowsById.get(1);
+  const t2 = inj.rowsById.get(2);
+
+  check('0-game season-ending injury uses preseason projection', Math.abs(t1.players[0].expectedPPG - 18) < 1e-9);
+  check('single starter slot is not double-counted across two injured RBs', Math.abs(t1.netLostPts - 8) < 1e-9, String(t1.netLostPts));
+  check('player started while out loses full expected PPG', Math.abs(t2.netLostPts - 16) < 1e-9 && t2.startedWhileOut === 1);
+  check('week range formatter groups consecutive weeks', formatWeekRanges([1, 2, 3, 5, 7, 8]) === 'W1–W3, W5, W7–W8');
+  check('estimateExpectedPPG blends actual and projected PPG', Math.abs(estimateExpectedPPG({
+    stats: [
+      { scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedAverage: 12, appliedTotal: 48, stats: { '210': 4 } },
+      { scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedAverage: 20, appliedTotal: 340 },
+    ],
+  }) - 16) < 1e-9);
 }
 
 console.log(failures ? `\n${failures} check(s) failed.\n` : '\nAll checks passed.\n');

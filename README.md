@@ -15,6 +15,7 @@ browser. No server, no accounts, no data leaves the page.
 | **Week-by-week grid** | A heat-mapped team × week matrix. Each cell is that team's record against the entire league that week, with a colored edge showing whether they actually won or lost. Includes a per-week drill-down. |
 | **Schedule swap** | A full round-robin: what every team's record would be playing every *other* team's schedule. The diagonal is their real season. Also ranks which schedule was easiest. |
 | **Power rankings** | Cumulative all-play win percentage converted to a weekly power rank, drawn as a line chart plus a rank table. |
+| **Injuries** | Season-long injury impact per team: non-bye missed player-weeks, replacement-adjusted **expected lost points** (weighing star injuries over bench depth), a team × week matrix, per-team injury logs, and the league's costliest single injuries. |
 
 Results are shareable — the URL updates with the league, season, and active tab, e.g.
 `#league=203836968&season=2024&tab=swap`.
@@ -30,6 +31,10 @@ Results are shareable — the URL updates with the league, season, and active ta
 - **Strength of schedule** — the average all-play strength of the opponents you actually faced.
 - **Schedule swap** — a team's weekly scores are replayed against another team's opponents. When the
   borrowed schedule would have a team face itself, it faces the schedule's owner instead.
+- **Expected lost points (Injuries)** — for every non-bye missed game on a team's weekly roster, a
+  player's healthy expected PPG (blending their healthy season average with ESPN's preseason
+  projection) is compared against the weakest eligible starter who filled in. Losing a top-10 QB or
+  RB1 costs far more than losing bench depth that wouldn't have started.
 
 Only **completed regular-season weeks** are counted. Playoff and consolation games are excluded, and
 any week that has not been fully scored is skipped so every view uses the same sample.
@@ -67,10 +72,11 @@ The included `.nojekyll` file stops Jekyll from interfering with the `js/` direc
 ## Project layout
 
 ```
-index.html      markup and the four tab panels
+index.html      markup and the five tab panels
 styles.css      all styling
-js/espn.js      fetches the ESPN API and normalizes a season into teams + weekly scores
+js/espn.js      fetches the ESPN API and normalizes a season into teams, weekly scores, and rosters
 js/sim.js       all the math: all-play, luck, schedule swaps, power rankings
+js/injuries.js  season-long injury impact and replacement-adjusted expected lost points
 js/chart.js     dependency-free SVG line chart
 js/app.js       rendering, tabs, URL state
 ```

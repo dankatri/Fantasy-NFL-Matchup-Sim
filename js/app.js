@@ -1,5 +1,6 @@
-import { loadLeague, EspnError } from './espn.js';
+import { loadLeague, loadLeagueRosters, EspnError } from './espn.js';
 import { buildAnalysis, formatRecord } from './sim.js';
+import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js';
 import { renderRankChart, teamColor } from './chart.js';
 
 const DEFAULT_SEASON = 2026;
@@ -23,6 +24,7 @@ const els = {
 
 let analysis = null;
 let colors = new Map();
+let injuryState = { key: null, status: 'idle', data: null, error: null };
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -40,6 +42,15 @@ function heatStyle(value) {
   const hue = 8 + value * 132;
   const alpha = 0.18 + Math.abs(value - 0.5) * 0.5;
   return `background: hsl(${hue} 70% 45% / ${alpha.toFixed(2)})`;
+}
+
+function injuryHeatStyle(ratio) {
+  // ratio in [0,1] -> transparent at 0, amber to crimson as impact rises
+  const clamped = Math.max(0, Math.min(1, ratio));
+  if (clamped < 0.01) return '';
+  const hue = 42 - clamped * 38;
+  const alpha = 0.14 + clamped * 0.44;
+  return `background: hsl(${hue} 78% 48% / ${alpha.toFixed(2)})`;
 }
 
 function cell(tag, content, opts = {}) {
@@ -507,6 +518,373 @@ function renderPower() {
   host.appendChild(wrap);
 }
 
+function renderPanelStatus(host, kind, title, detail) {
+  host.innerHTML = '';
+  const box = document.createElement('div');
+  box.className = `panel-status ${kind}`;
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  box.appendChild(strong);
+  if (detail) {
+    const span = document.createElement('span');
+    span.textContent = detail;
+    box.appendChild(span);
+  }
+  host.appendChild(box);
+}
+
+function renderInjuries() {
+  const host = $('#panel-injuries');
+  host.innerHTML = '';
+
+  if (injuryState.status === 'loading') {
+    renderPanelStatus(
+      host,
+      'loading',
+      'Loading weekly rosters from ESPN…',
+      `Scanning ${analysis.weeks.length} completed weeks for missed games and replacement starters.`
+    );
+    return;
+  }
+
+  if (injuryState.status === 'error') {
+    renderPanelStatus(
+      host,
+      'error',
+      injuryState.error?.message || 'Could not load injury data.',
+      injuryState.error?.hint || ''
+    );
+    return;
+  }
+
+  const inj = injuryState.data;
+  if (!inj) return;
+
+  host.appendChild(
+    cell(
+      'p',
+      'Tracks non-bye missed games across every team\'s weekly roster. <em>Exp. lost pts</em> measures actual lineup impact: each injured player\'s healthy expected PPG minus the weakest eligible starter who filled in (bench depth that wouldn\'t have started counts as 0).',
+      { className: 'panel-note', html: true }
+    )
+  );
+
+  const { wrap, tbody } = table([
+    { label: '#', className: 'col-rank', title: 'Injury impact rank (1 = most points lost)' },
+    { label: 'Team', className: 'col-team' },
+    { label: 'Exp. lost pts', title: 'Expected starting-lineup points lost above replacement across the season' },
+    { label: 'Lost/wk', title: 'Average expected lost points per completed week' },
+    { label: 'Impact wks', title: 'Missed player-weeks that cost starting lineup points' },
+    { label: 'Total missed', title: 'Total rostered non-bye player-weeks missed (including bench depth)' },
+    { label: 'Players', title: 'Distinct rostered players who missed at least one non-bye game' },
+    { label: 'Gross pts', title: 'Unadjusted sum of healthy expected PPG for all missed player-weeks' },
+    { label: 'Biggest loss', className: 'text-left', title: 'Single player who cost this team the most expected points' },
+  ]);
+
+  for (const row of inj.rows) {
+    const tr = document.createElement('tr');
+    tr.appendChild(cell('td', String(row.impactRank), { className: 'rank' }));
+    tr.appendChild(teamCell(row));
+    tr.appendChild(
+      cell('td', num(row.netLostPts), {
+        className: 'mono',
+        style: injuryHeatStyle(row.netLostPts / inj.maxNetLostPts),
+        title: `${num(row.netLostPts)} expected points lost above replacement (#${row.impactRank} most impacted)`,
+      })
+    );
+    tr.appendChild(cell('td', num(row.netLostPerWeek), { className: 'mono' }));
+    tr.appendChild(cell('td', String(row.impactWeeks), { className: 'mono' }));
+    tr.appendChild(
+      cell('td', String(row.missedWeeks), {
+        className: 'mono',
+        title: `#${row.missedRank} in raw missed player-weeks (${row.missedWeeks - row.impactWeeks} bench-depth)`,
+      })
+    );
+    tr.appendChild(cell('td', String(row.uniquePlayers), { className: 'mono' }));
+    tr.appendChild(cell('td', num(row.grossLostPts), { className: 'mono muted' }));
+
+    const big = row.biggestLoss;
+    tr.appendChild(
+      cell(
+        'td',
+        big && big.netLostPts > 0.05
+          ? `${big.name} (${num(big.netLostPts)} pts · ${big.weeksMissed}w)`
+          : big
+            ? `${big.name} (${big.weeksMissed}w, bench)`
+            : '—',
+        { className: 'text-left' }
+      )
+    );
+    tbody.appendChild(tr);
+  }
+
+  host.appendChild(wrap);
+  host.appendChild(renderInjuryHighlights(inj));
+  host.appendChild(renderInjuryMatrix(inj));
+  host.appendChild(renderTeamInjuryBreakdown(inj));
+  host.appendChild(renderCostliestInjuries(inj));
+}
+
+function renderInjuryHighlights(inj) {
+  const rows = inj.rows;
+  const worst = rows[0];
+  const healthiest = rows[rows.length - 1];
+  const mostMissed = [...rows].sort((a, b) => b.missedWeeks - a.missedWeeks || b.netLostPts - a.netLostPts)[0];
+  const topPlayer = inj.costliestInjuries[0];
+
+  const cards = [
+    {
+      label: 'Hardest hit',
+      value: worst.team.name,
+      sub: `${num(worst.netLostPts)} exp. lost pts · ${worst.impactWeeks} impact wks`,
+    },
+    {
+      label: 'Healthiest roster',
+      value: healthiest.team.name,
+      sub: `${num(healthiest.netLostPts)} exp. lost pts · ${healthiest.missedWeeks} missed wks`,
+    },
+    {
+      label: 'Most games missed',
+      value: mostMissed.team.name,
+      sub: `${mostMissed.missedWeeks} player-wks across ${mostMissed.uniquePlayers} players`,
+    },
+    {
+      label: 'Costliest injury',
+      value: topPlayer ? `${topPlayer.name} (${topPlayer.position})` : 'None',
+      sub: topPlayer
+        ? `${topPlayer.team.name} · ${num(topPlayer.netLostPts)} pts over ${topPlayer.weeksMissed}w`
+        : 'No impactful injuries recorded',
+    },
+  ];
+
+  const grid = document.createElement('div');
+  grid.className = 'cards';
+  for (const c of cards) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const label = cell('span', c.label, { className: 'card-label' });
+    const value = cell('strong', c.value, { className: 'card-value' });
+    const sub = cell('span', c.sub, { className: 'card-sub' });
+    card.append(label, value, sub);
+    grid.appendChild(card);
+  }
+  return grid;
+}
+
+function renderInjuryMatrix(inj) {
+  const section = document.createElement('section');
+  section.className = 'subsection';
+  section.innerHTML = '<div class="subsection-head"><h3>Expected lost points by week</h3></div>';
+
+  const headers = [
+    { label: 'Team', className: 'col-team' },
+    ...inj.weeks.map((w) => ({ label: `W${w}`, className: 'week-col' })),
+    { label: 'Total', className: 'total-col' },
+  ];
+  const { wrap, tbody } = table(headers, { stickyFirst: true });
+
+  for (const row of inj.rows) {
+    const tr = document.createElement('tr');
+    tr.appendChild(teamCell(row));
+
+    for (const week of inj.weeks) {
+      const wk = row.byWeek.get(week);
+      if (!wk || wk.missedCount === 0) {
+        tr.appendChild(cell('td', '—', { className: 'mono muted' }));
+        continue;
+      }
+
+      const startedOut = wk.players.some((p) => p.isStarter);
+      const lines = wk.players.map((p) => {
+        if (p.isStarter) return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — started while out (-${num(p.netLost)})`;
+        if (p.replacement) {
+          return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) vs ${p.replacement.name} (${num(p.replacement.expectedPPG)}) -> -${num(p.netLost)}`;
+        }
+        return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — bench depth (0.0)`;
+      });
+
+      const title = `Week ${week} · ${wk.missedCount} out (${num(wk.netLost)} exp. lost pts)\n${lines.join('\n')}`;
+      const label = wk.netLost >= 0.05 ? `-${num(wk.netLost)}` : '0.0';
+
+      tr.appendChild(
+        cell('td', label, {
+          className: `mono injury-cell${startedOut ? ' started-out' : ''}${wk.netLost < 0.05 ? ' muted' : ''}`,
+          style: injuryHeatStyle(wk.netLost / inj.maxWeekNetLost),
+          title,
+        })
+      );
+    }
+
+    tr.appendChild(
+      cell('td', num(row.netLostPts), {
+        className: 'mono total-col',
+        style: injuryHeatStyle(row.netLostPts / inj.maxNetLostPts),
+      })
+    );
+    tbody.appendChild(tr);
+  }
+
+  section.appendChild(wrap);
+  return section;
+}
+
+function renderTeamInjuryBreakdown(inj) {
+  const section = document.createElement('section');
+  section.className = 'subsection';
+
+  const header = document.createElement('div');
+  header.className = 'subsection-head';
+  header.innerHTML = '<h3>Team injury log</h3>';
+
+  const select = document.createElement('select');
+  select.className = 'week-select';
+  for (const row of inj.rows) {
+    const opt = document.createElement('option');
+    opt.value = String(row.id);
+    opt.textContent = `${row.team.name} (${num(row.netLostPts)} pts)`;
+    select.appendChild(opt);
+  }
+  header.appendChild(select);
+  section.appendChild(header);
+
+  const body = document.createElement('div');
+  section.appendChild(body);
+
+  const draw = () => {
+    const row = inj.rowsById.get(Number(select.value));
+    body.innerHTML = '';
+    if (!row || !row.players.length) {
+      body.appendChild(cell('p', 'No non-bye missed games recorded for this team.', { className: 'panel-note' }));
+      return;
+    }
+
+    const maxPlayerLost = Math.max(1, ...row.players.map((p) => p.netLostPts));
+    const { wrap, tbody } = table([
+      { label: 'Player', className: 'text-left' },
+      { label: 'Pos', className: 'text-left' },
+      { label: 'Weeks out', className: 'text-left' },
+      { label: 'Missed', title: 'Total non-bye weeks missed' },
+      { label: 'Impact wks', title: 'Weeks where this absence cost starting lineup points' },
+      { label: 'Healthy PPG', title: 'Blended healthy expected points per game' },
+      { label: 'Exp. lost pts', title: 'Expected lineup points lost above replacement' },
+      { label: 'Gross pts', title: 'Healthy PPG × weeks missed' },
+    ]);
+
+    for (const p of row.players) {
+      const tr = document.createElement('tr');
+      tr.appendChild(cell('td', p.name, { className: 'text-left' }));
+      const posTd = document.createElement('td');
+      posTd.className = 'text-left';
+      posTd.appendChild(cell('span', p.position, { className: 'pos-pill' }));
+      tr.appendChild(posTd);
+      tr.appendChild(cell('td', formatWeekRanges(p.weeks), { className: 'mono text-left muted' }));
+      tr.appendChild(cell('td', String(p.weeksMissed), { className: 'mono' }));
+      tr.appendChild(cell('td', String(p.impactWeeks), { className: 'mono' }));
+      tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
+      tr.appendChild(
+        cell('td', num(p.netLostPts), {
+          className: `mono${p.netLostPts < 0.05 ? ' muted' : ''}`,
+          style: injuryHeatStyle(p.netLostPts / maxPlayerLost),
+        })
+      );
+      tr.appendChild(cell('td', num(p.grossLostPts), { className: 'mono muted' }));
+      tbody.appendChild(tr);
+    }
+
+    body.appendChild(wrap);
+  };
+
+  select.addEventListener('change', draw);
+  draw();
+  return section;
+}
+
+function renderCostliestInjuries(inj) {
+  const section = document.createElement('section');
+  section.className = 'subsection';
+  section.innerHTML = '<div class="subsection-head"><h3>Costliest injuries across the league</h3></div>';
+
+  const top = inj.costliestInjuries.slice(0, 10);
+  if (!top.length) {
+    section.appendChild(cell('p', 'No impactful injuries recorded across the league.', { className: 'panel-note' }));
+    return section;
+  }
+
+  const maxLost = Math.max(1, top[0].netLostPts);
+  const { wrap, tbody } = table([
+    { label: '#', className: 'col-rank' },
+    { label: 'Player', className: 'text-left' },
+    { label: 'Pos', className: 'text-left' },
+    { label: 'Team', className: 'col-team' },
+    { label: 'Weeks out', className: 'text-left' },
+    { label: 'Healthy PPG' },
+    { label: 'Exp. lost pts' },
+  ]);
+
+  top.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    tr.appendChild(cell('td', String(idx + 1), { className: 'rank' }));
+    tr.appendChild(cell('td', p.name, { className: 'text-left' }));
+    const posTd = document.createElement('td');
+    posTd.className = 'text-left';
+    posTd.appendChild(cell('span', p.position, { className: 'pos-pill' }));
+    tr.appendChild(posTd);
+    tr.appendChild(teamCell({ id: p.teamId, team: p.team }));
+    tr.appendChild(cell('td', `${p.weeksMissed}w (${formatWeekRanges(p.weeks)})`, { className: 'mono text-left muted' }));
+    tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
+    tr.appendChild(
+      cell('td', num(p.netLostPts), {
+        className: 'mono',
+        style: injuryHeatStyle(p.netLostPts / maxLost),
+      })
+    );
+    tbody.appendChild(tr);
+  });
+
+  section.appendChild(wrap);
+  return section;
+}
+
+async function ensureInjuriesLoaded() {
+  if (!analysis) return;
+  const { league } = analysis;
+  const key = `${league.leagueId}:${league.season}`;
+  if (injuryState.key === key && (injuryState.status === 'loading' || injuryState.status === 'ready')) {
+    renderInjuries();
+    return;
+  }
+
+  injuryState = { key, status: 'loading', data: null, error: null };
+  renderInjuries();
+
+  try {
+    const rosters = await loadLeagueRosters(
+      league.leagueId,
+      league.season,
+      analysis.weeks,
+      league.teams.map((t) => t.id)
+    );
+    // Ignore stale response if the user switched leagues while loading.
+    if (injuryState.key !== key) return;
+    injuryState = {
+      key,
+      status: 'ready',
+      data: buildInjuryAnalysis(league, rosters),
+      error: null,
+    };
+  } catch (err) {
+    if (injuryState.key !== key) return;
+    console.error(err);
+    injuryState = {
+      key,
+      status: 'error',
+      data: null,
+      error: err instanceof EspnError ? err : new EspnError('Could not load weekly rosters.', err.message),
+    };
+  }
+
+  if (activeTab === 'injuries') renderInjuries();
+}
+
 function renderAll() {
   const { league } = analysis;
   els.leagueName.textContent = league.name;
@@ -529,7 +907,7 @@ function renderAll() {
 
 /* ------------------------------------------------------------------ tabs */
 
-const TABS = ['standings', 'grid', 'swap', 'power'];
+const TABS = ['standings', 'grid', 'swap', 'power', 'injuries'];
 let activeTab = 'standings';
 
 function syncHash() {
@@ -548,6 +926,7 @@ function activateTab(name, { updateHash = true } = {}) {
   for (const panel of els.panels) {
     panel.hidden = panel.id !== `panel-${activeTab}`;
   }
+  if (activeTab === 'injuries' && analysis) ensureInjuriesLoaded();
   if (updateHash) syncHash();
 }
 
@@ -578,6 +957,8 @@ async function run(leagueId, season, { updateHash = true, tab = 'standings' } = 
   try {
     const league = await loadLeague(id, season);
     analysis = buildAnalysis(league);
+    injuryState = { key: null, status: 'idle', data: null, error: null };
+    $('#panel-injuries').innerHTML = '';
     colors = new Map(analysis.rows.map((row, i) => [row.id, teamColor(i, analysis.rows.length)]));
     renderAll();
     activateTab(tab, { updateHash });

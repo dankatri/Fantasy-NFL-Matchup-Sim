@@ -290,12 +290,18 @@ suite('Injury edge cases: multiple same-slot injuries, started while out, 0-game
   check('single starter slot is not double-counted across two injured RBs', Math.abs(t1.netLostPts - 8) < 1e-9, String(t1.netLostPts));
   check('player started while out loses full expected PPG', Math.abs(t2.netLostPts - 16) < 1e-9 && t2.startedWhileOut === 1);
   check('week range formatter groups consecutive weeks', formatWeekRanges([1, 2, 3, 5, 7, 8]) === 'W1–W3, W5, W7–W8');
-  check('estimateExpectedPPG blends actual and projected PPG', Math.abs(estimateExpectedPPG({
+  check('estimateExpectedPPG uses the season average once a player has played', Math.abs(estimateExpectedPPG({
     stats: [
       { scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedAverage: 12, appliedTotal: 48, stats: { '210': 4 } },
       { scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedAverage: 20, appliedTotal: 340 },
     ],
-  }) - 16) < 1e-9);
+  }) - 12) < 1e-9);
+  check('estimateExpectedPPG ignores the previous season\'s average', Math.abs(estimateExpectedPPG({
+    stats: [
+      { seasonId: 2025, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedAverage: 20, appliedTotal: 320, stats: { 210: 16 } },
+      { seasonId: 2026, scoringPeriodId: 0, statSourceId: 0, statSplitTypeId: 0, appliedAverage: 16, appliedTotal: 80, stats: { 210: 5 } },
+    ],
+  }, 2026) - 16) < 1e-9);
 }
 
 suite('Players released while injured keep costing the releasing team');
@@ -371,8 +377,9 @@ suite('Players released while injured keep costing the releasing team');
 
   check('injured release keeps counting non-bye weeks until the player returns', star.weeks.join() === '1,2,4', star.weeks.join());
   check('weeks after release are flagged', star.releasedWeeks === 2, String(star.releasedWeeks));
-  check('released weeks are charged against the weakest eligible starter', Math.abs(t1.netLostPts - 24) < 1e-9, String(t1.netLostPts));
-  check('post-release loss is reported separately', Math.abs(t1.releasedLostPts - 16) < 1e-9, String(t1.releasedLostPts));
+  check('every week out costs the full season average', Math.abs(t1.lostPts - 60) < 1e-9, String(t1.lostPts));
+  check('above-replacement loss subtracts the weakest eligible starter', Math.abs(t1.netLostPts - 24) < 1e-9, String(t1.netLostPts));
+  check('post-release loss is reported separately', Math.abs(t1.releasedLostPts - 40) < 1e-9, String(t1.releasedLostPts));
   check('healthy releases are not charged', t2.missedWeeks === 0 && t2.releasedLostPts === 0);
 }
 

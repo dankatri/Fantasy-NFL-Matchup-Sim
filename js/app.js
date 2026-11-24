@@ -1,6 +1,6 @@
-import { loadLeague, loadLeagueRosters, EspnError } from './espn.js?v=3';
+import { loadLeague, loadLeagueRosters, EspnError } from './espn.js?v=4';
 import { buildAnalysis, formatRecord } from './sim.js';
-import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js?v=3';
+import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js?v=4';
 import { renderRankChart, teamColor } from './chart.js';
 
 const DEFAULT_SEASON = 2026;
@@ -563,7 +563,7 @@ function renderInjuries() {
   host.appendChild(
     cell(
       'p',
-      'Tracks non-bye missed games across every team\'s weekly roster. <em>Exp. lost pts</em> measures actual lineup impact: each injured player\'s healthy expected PPG minus the weakest eligible starter who filled in (bench depth that wouldn\'t have started counts as 0). Players a team <em>released while injured</em> keep costing that team every week they stay out, so dropping an injured star doesn\'t hide the loss.',
+      'Tracks non-bye missed games across every team\'s weekly roster. <em>Lost pts</em> assumes each injured player would have scored his season average every week he was out. <em>Above repl.</em> subtracts the weakest eligible starter who filled in (bench depth that wouldn\'t have started counts as 0). Players a team <em>released while injured</em> keep costing that team every week they stay out, so dropping an injured star doesn\'t hide the loss.',
       { className: 'panel-note', html: true }
     )
   );
@@ -571,13 +571,13 @@ function renderInjuries() {
   const { wrap, tbody } = table([
     { label: '#', className: 'col-rank', title: 'Injury impact rank (1 = most points lost)' },
     { label: 'Team', className: 'col-team' },
-    { label: 'Exp. lost pts', title: 'Expected starting-lineup points lost above replacement across the season' },
-    { label: 'Lost/wk', title: 'Average expected lost points per completed week' },
-    { label: 'Impact wks', title: 'Missed player-weeks that cost starting lineup points' },
+    { label: 'Lost pts', title: 'Season average × weeks out, summed across injured players' },
+    { label: 'Lost/wk', title: 'Lost points per completed week' },
+    { label: 'Above repl.', title: 'Lost points minus the weakest eligible starter who filled in' },
+    { label: 'Impact wks', title: 'Missed player-weeks that cost points above replacement' },
     { label: 'Total missed', title: 'Total rostered non-bye player-weeks missed (including bench depth)' },
     { label: 'Players', title: 'Distinct rostered players who missed at least one non-bye game' },
-    { label: 'Gross pts', title: 'Unadjusted sum of healthy expected PPG for all missed player-weeks' },
-    { label: 'After release', title: 'Expected lost points from injured players the team released, for the weeks they stayed out after the release' },
+    { label: 'After release', title: 'Lost points from injured players the team released, for the weeks they stayed out after the release' },
     { label: 'Biggest loss', className: 'text-left', title: 'Single player who cost this team the most expected points' },
   ]);
 
@@ -586,13 +586,14 @@ function renderInjuries() {
     tr.appendChild(cell('td', String(row.impactRank), { className: 'rank' }));
     tr.appendChild(teamCell(row));
     tr.appendChild(
-      cell('td', num(row.netLostPts), {
+      cell('td', num(row.lostPts), {
         className: 'mono',
-        style: injuryHeatStyle(row.netLostPts / inj.maxNetLostPts),
-        title: `${num(row.netLostPts)} expected points lost above replacement (#${row.impactRank} most impacted)`,
+        style: injuryHeatStyle(row.lostPts / inj.maxLostPts),
+        title: `${num(row.lostPts)} points lost at season average (#${row.impactRank} most impacted)`,
       })
     );
-    tr.appendChild(cell('td', num(row.netLostPerWeek), { className: 'mono' }));
+    tr.appendChild(cell('td', num(row.lostPerWeek), { className: 'mono' }));
+    tr.appendChild(cell('td', num(row.netLostPts), { className: 'mono muted' }));
     tr.appendChild(cell('td', String(row.impactWeeks), { className: 'mono' }));
     tr.appendChild(
       cell('td', String(row.missedWeeks), {
@@ -601,18 +602,13 @@ function renderInjuries() {
       })
     );
     tr.appendChild(cell('td', String(row.uniquePlayers), { className: 'mono' }));
-    tr.appendChild(cell('td', num(row.grossLostPts), { className: 'mono muted' }));
     tr.appendChild(cell('td', row.releasedLostPts >= 0.05 ? num(row.releasedLostPts) : '—', { className: 'mono' }));
 
     const big = row.biggestLoss;
     tr.appendChild(
       cell(
         'td',
-        big && big.netLostPts > 0.05
-          ? `${big.name} (${num(big.netLostPts)} pts · ${big.weeksMissed}w)`
-          : big
-            ? `${big.name} (${big.weeksMissed}w, bench)`
-            : '—',
+        big ? `${big.name} (${num(big.lostPts)} pts · ${big.weeksMissed}w)` : '—',
         { className: 'text-left' }
       )
     );
@@ -630,19 +626,19 @@ function renderInjuryHighlights(inj) {
   const rows = inj.rows;
   const worst = rows[0];
   const healthiest = rows[rows.length - 1];
-  const mostMissed = [...rows].sort((a, b) => b.missedWeeks - a.missedWeeks || b.netLostPts - a.netLostPts)[0];
+  const mostMissed = [...rows].sort((a, b) => b.missedWeeks - a.missedWeeks || b.lostPts - a.lostPts)[0];
   const topPlayer = inj.costliestInjuries[0];
 
   const cards = [
     {
       label: 'Hardest hit',
       value: worst.team.name,
-      sub: `${num(worst.netLostPts)} exp. lost pts · ${worst.impactWeeks} impact wks`,
+      sub: `${num(worst.lostPts)} lost pts · ${num(worst.netLostPts)} above repl.`,
     },
     {
       label: 'Healthiest roster',
       value: healthiest.team.name,
-      sub: `${num(healthiest.netLostPts)} exp. lost pts · ${healthiest.missedWeeks} missed wks`,
+      sub: `${num(healthiest.lostPts)} lost pts · ${healthiest.missedWeeks} missed wks`,
     },
     {
       label: 'Most games missed',
@@ -653,7 +649,7 @@ function renderInjuryHighlights(inj) {
       label: 'Costliest injury',
       value: topPlayer ? `${topPlayer.name} (${topPlayer.position})` : 'None',
       sub: topPlayer
-        ? `${topPlayer.team.name} · ${num(topPlayer.netLostPts)} pts over ${topPlayer.weeksMissed}w`
+        ? `${topPlayer.team.name} · ${num(topPlayer.lostPts)} pts over ${topPlayer.weeksMissed}w`
         : 'No impactful injuries recorded',
     },
   ];
@@ -675,7 +671,7 @@ function renderInjuryHighlights(inj) {
 function renderInjuryMatrix(inj) {
   const section = document.createElement('section');
   section.className = 'subsection';
-  section.innerHTML = '<div class="subsection-head"><h3>Expected lost points by week</h3></div>';
+  section.innerHTML = '<div class="subsection-head"><h3>Lost points by week</h3></div>';
 
   const headers = [
     { label: 'Team', className: 'col-team' },
@@ -697,33 +693,29 @@ function renderInjuryMatrix(inj) {
 
       const startedOut = wk.players.some((p) => p.isStarter);
       const lines = wk.players.map((p) => {
-        if (p.released) {
-          const vs = p.replacement ? ` vs ${p.replacement.name} (${num(p.replacement.expectedPPG)})` : '';
-          return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — released while injured${vs} -> -${num(p.netLost)}`;
-        }
-        if (p.isStarter) return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — started while out (-${num(p.netLost)})`;
-        if (p.replacement) {
-          return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) vs ${p.replacement.name} (${num(p.replacement.expectedPPG)}) -> -${num(p.netLost)}`;
-        }
-        return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — bench depth (0.0)`;
+        const head = `${p.name} (${p.position}) -${num(p.lost)}`;
+        if (p.isStarter) return `${head} — started while out`;
+        const why = p.released ? 'released while injured' : p.replacement ? '' : 'bench depth';
+        const vs = p.replacement ? `vs ${p.replacement.name} (${num(p.replacement.expectedPPG)})` : '';
+        return `${head} — ${[why, vs].filter(Boolean).join(', ')}, ${num(p.netLost)} above repl.`;
       });
 
-      const title = `Week ${week} · ${wk.missedCount} out (${num(wk.netLost)} exp. lost pts)\n${lines.join('\n')}`;
-      const label = wk.netLost >= 0.05 ? `-${num(wk.netLost)}` : '0.0';
+      const title = `Week ${week} · ${wk.missedCount} out (${num(wk.lost)} lost pts, ${num(wk.netLost)} above repl.)\n${lines.join('\n')}`;
+      const label = wk.lost >= 0.05 ? `-${num(wk.lost)}` : '0.0';
 
       tr.appendChild(
         cell('td', label, {
-          className: `mono injury-cell${startedOut ? ' started-out' : ''}${wk.netLost < 0.05 ? ' muted' : ''}`,
-          style: injuryHeatStyle(wk.netLost / inj.maxWeekNetLost),
+          className: `mono injury-cell${startedOut ? ' started-out' : ''}${wk.lost < 0.05 ? ' muted' : ''}`,
+          style: injuryHeatStyle(wk.lost / inj.maxWeekLost),
           title,
         })
       );
     }
 
     tr.appendChild(
-      cell('td', num(row.netLostPts), {
+      cell('td', num(row.lostPts), {
         className: 'mono total-col',
-        style: injuryHeatStyle(row.netLostPts / inj.maxNetLostPts),
+        style: injuryHeatStyle(row.lostPts / inj.maxLostPts),
       })
     );
     tbody.appendChild(tr);
@@ -746,7 +738,7 @@ function renderTeamInjuryBreakdown(inj) {
   for (const row of inj.rows) {
     const opt = document.createElement('option');
     opt.value = String(row.id);
-    opt.textContent = `${row.team.name} (${num(row.netLostPts)} pts)`;
+    opt.textContent = `${row.team.name} (${num(row.lostPts)} pts)`;
     select.appendChild(opt);
   }
   header.appendChild(select);
@@ -763,16 +755,16 @@ function renderTeamInjuryBreakdown(inj) {
       return;
     }
 
-    const maxPlayerLost = Math.max(1, ...row.players.map((p) => p.netLostPts));
+    const maxPlayerLost = Math.max(1, ...row.players.map((p) => p.lostPts));
     const { wrap, tbody } = table([
       { label: 'Player', className: 'text-left' },
       { label: 'Pos', className: 'text-left' },
       { label: 'Weeks out', className: 'text-left' },
       { label: 'Missed', title: 'Total non-bye weeks missed' },
-      { label: 'Impact wks', title: 'Weeks where this absence cost starting lineup points' },
-      { label: 'Healthy PPG', title: 'Blended healthy expected points per game' },
-      { label: 'Exp. lost pts', title: 'Expected lineup points lost above replacement' },
-      { label: 'Gross pts', title: 'Healthy PPG × weeks missed' },
+      { label: 'Impact wks', title: 'Weeks where this absence cost points above replacement' },
+      { label: 'Season avg', title: 'Season scoring average across games played' },
+      { label: 'Lost pts', title: 'Season average × weeks out' },
+      { label: 'Above repl.', title: 'Lost points minus the weakest eligible starter who filled in' },
     ]);
 
     for (const p of row.players) {
@@ -791,12 +783,12 @@ function renderTeamInjuryBreakdown(inj) {
       tr.appendChild(cell('td', String(p.impactWeeks), { className: 'mono' }));
       tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
       tr.appendChild(
-        cell('td', num(p.netLostPts), {
-          className: `mono${p.netLostPts < 0.05 ? ' muted' : ''}`,
-          style: injuryHeatStyle(p.netLostPts / maxPlayerLost),
+        cell('td', num(p.lostPts), {
+          className: `mono${p.lostPts < 0.05 ? ' muted' : ''}`,
+          style: injuryHeatStyle(p.lostPts / maxPlayerLost),
         })
       );
-      tr.appendChild(cell('td', num(p.grossLostPts), { className: 'mono muted' }));
+      tr.appendChild(cell('td', num(p.netLostPts), { className: 'mono muted' }));
       tbody.appendChild(tr);
     }
 
@@ -819,15 +811,16 @@ function renderCostliestInjuries(inj) {
     return section;
   }
 
-  const maxLost = Math.max(1, top[0].netLostPts);
+  const maxLost = Math.max(1, top[0].lostPts);
   const { wrap, tbody } = table([
     { label: '#', className: 'col-rank' },
     { label: 'Player', className: 'text-left' },
     { label: 'Pos', className: 'text-left' },
     { label: 'Team', className: 'col-team' },
     { label: 'Weeks out', className: 'text-left' },
-    { label: 'Healthy PPG' },
-    { label: 'Exp. lost pts' },
+    { label: 'Season avg' },
+    { label: 'Lost pts' },
+    { label: 'Above repl.' },
   ]);
 
   top.forEach((p, idx) => {
@@ -848,11 +841,12 @@ function renderCostliestInjuries(inj) {
     );
     tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
     tr.appendChild(
-      cell('td', num(p.netLostPts), {
+      cell('td', num(p.lostPts), {
         className: 'mono',
-        style: injuryHeatStyle(p.netLostPts / maxLost),
+        style: injuryHeatStyle(p.lostPts / maxLost),
       })
     );
+    tr.appendChild(cell('td', num(p.netLostPts), { className: 'mono muted' }));
     tbody.appendChild(tr);
   });
 

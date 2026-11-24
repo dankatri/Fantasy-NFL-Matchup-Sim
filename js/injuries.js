@@ -29,11 +29,13 @@ export function formatWeekRanges(weeks) {
  *
  * For each missed player-week (non-bye DNP on a team's roster, or a released
  * player the team dropped while injured and who is still out):
- * - If left in a starting slot, the full expected PPG is lost.
- * - If moved to bench or IR, expected lost points is the gap between the injured
- *   player's healthy expected PPG and the weakest eligible starter the team had
- *   to play in their place (floored at 0, so bench-depth injuries don't inflate
- *   starting-lineup impact). Each starter slot is matched at most once per week.
+ * - Lost points (the headline figure) is the player's season scoring average:
+ *   the team is assumed to lose what he would have averaged that week.
+ * - Lost above replacement is the secondary figure. If left in a starting slot,
+ *   the full average is lost. If moved to bench or IR, it is the gap between the
+ *   injured player's average and the weakest eligible starter the team had to
+ *   play in his place (floored at 0). Each starter slot is matched at most once
+ *   per week.
  */
 export function buildInjuryAnalysis(league, rostersByWeek) {
   const weeks = league.weeks.map((w) => w.week).filter((w) => rostersByWeek.has(w));
@@ -48,7 +50,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
         missedWeeks: 0,
         impactWeeks: 0,
         startedWhileOut: 0,
-        grossLostPts: 0,
+        lostPts: 0,
         netLostPts: 0,
         releasedLostPts: 0,
         byWeek: new Map(),
@@ -89,7 +91,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
 
       const weekEvents = [];
       let weekNetLost = 0;
-      let weekGrossLost = 0;
+      let weekLost = 0;
 
       for (const m of missed) {
         let netLost = 0;
@@ -113,20 +115,21 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
           }
         }
 
-        const gross = m.expectedPPG;
+        const lost = m.expectedPPG;
         agg.missedWeeks += 1;
         if (netLost > EPS) agg.impactWeeks += 1;
-        agg.grossLostPts += gross;
+        agg.lostPts += lost;
         agg.netLostPts += netLost;
         weekNetLost += netLost;
-        weekGrossLost += gross;
-        if (m.released) agg.releasedLostPts += netLost;
+        weekLost += lost;
+        if (m.released) agg.releasedLostPts += lost;
 
         weekEvents.push({
           playerId: m.playerId,
           name: m.name,
           position: m.position,
           expectedPPG: m.expectedPPG,
+          lost,
           netLost,
           isStarter: m.isStarter,
           isIR: m.isIR,
@@ -144,8 +147,8 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
             weeksMissed: 0,
             releasedWeeks: 0,
             impactWeeks: 0,
+            lostPts: 0,
             netLostPts: 0,
-            grossLostPts: 0,
             weeks: [],
           };
           agg.playersById.set(m.playerId, pAgg);
@@ -153,8 +156,8 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
         pAgg.weeksMissed += 1;
         if (m.released) pAgg.releasedWeeks += 1;
         if (netLost > EPS) pAgg.impactWeeks += 1;
+        pAgg.lostPts += lost;
         pAgg.netLostPts += netLost;
-        pAgg.grossLostPts += gross;
         pAgg.weeks.push(week);
       }
 
@@ -162,8 +165,8 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
         week,
         missedCount: weekEvents.length,
         impactCount: weekEvents.filter((e) => e.netLost > EPS).length,
+        lost: weekLost,
         netLost: weekNetLost,
-        grossLost: weekGrossLost,
         players: weekEvents,
       });
     }
@@ -172,7 +175,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
   const weekCount = weeks.length;
   const rows = [...aggByTeam.values()].map((agg) => {
     const players = [...agg.playersById.values()].sort(
-      (a, b) => b.netLostPts - a.netLostPts || b.weeksMissed - a.weeksMissed || b.expectedPPG - a.expectedPPG
+      (a, b) => b.lostPts - a.lostPts || b.weeksMissed - a.weeksMissed || b.expectedPPG - a.expectedPPG
     );
     return {
       id: agg.id,
@@ -181,9 +184,9 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
       impactWeeks: agg.impactWeeks,
       startedWhileOut: agg.startedWhileOut,
       uniquePlayers: players.length,
+      lostPts: agg.lostPts,
+      lostPerWeek: weekCount ? agg.lostPts / weekCount : 0,
       netLostPts: agg.netLostPts,
-      netLostPerWeek: weekCount ? agg.netLostPts / weekCount : 0,
-      grossLostPts: agg.grossLostPts,
       releasedLostPts: agg.releasedLostPts,
       byWeek: agg.byWeek,
       players,
@@ -191,13 +194,13 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
     };
   });
 
-  // Rank by net expected lost points (1 = most impacted).
-  rows.sort((a, b) => b.netLostPts - a.netLostPts || b.missedWeeks - a.missedWeeks);
+  // Rank by lost points (1 = most impacted).
+  rows.sort((a, b) => b.lostPts - a.lostPts || b.missedWeeks - a.missedWeeks);
   rows.forEach((row, idx) => {
     row.impactRank = idx + 1;
   });
 
-  const byMissed = [...rows].sort((a, b) => b.missedWeeks - a.missedWeeks || b.netLostPts - a.netLostPts);
+  const byMissed = [...rows].sort((a, b) => b.missedWeeks - a.missedWeeks || b.lostPts - a.lostPts);
   byMissed.forEach((row, idx) => {
     row.missedRank = idx + 1;
   });
@@ -206,7 +209,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
   const costliestInjuries = [];
   for (const row of rows) {
     for (const p of row.players) {
-      if (p.netLostPts > EPS) {
+      if (p.lostPts > EPS) {
         costliestInjuries.push({
           ...p,
           teamId: row.id,
@@ -215,19 +218,16 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
       }
     }
   }
-  costliestInjuries.sort((a, b) => b.netLostPts - a.netLostPts || b.weeksMissed - a.weeksMissed);
+  costliestInjuries.sort((a, b) => b.lostPts - a.lostPts || b.weeksMissed - a.weeksMissed);
 
-  const maxWeekNetLost = Math.max(
-    1,
-    ...rows.flatMap((r) => [...r.byWeek.values()].map((w) => w.netLost))
-  );
+  const maxWeekLost = Math.max(1, ...rows.flatMap((r) => [...r.byWeek.values()].map((w) => w.lost)));
 
   return {
     weeks,
     rows,
     rowsById: new Map(rows.map((r) => [r.id, r])),
     costliestInjuries,
-    maxNetLostPts: Math.max(1, ...rows.map((r) => r.netLostPts)),
-    maxWeekNetLost,
+    maxLostPts: Math.max(1, ...rows.map((r) => r.lostPts)),
+    maxWeekLost,
   };
 }

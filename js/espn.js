@@ -2,7 +2,6 @@ const BASE = 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl';
 const VIEWS = ['mTeam', 'mSettings', 'mMatchupScore'];
 const BENCH_SLOT = 20;
 const IR_SLOT = 21;
-const PRIOR_GAMES = 4;
 
 const POSITION_NAMES = {
   1: 'QB',
@@ -233,13 +232,18 @@ async function fetchRosterWeek(leagueId, season, week) {
   return null;
 }
 
+// ESPN roster snapshots also carry the previous season's totals.
+function inSeason(stat, season) {
+  return season == null || stat.seasonId == null || stat.seasonId === season;
+}
+
 /**
- * Blend a player's actual healthy PPG with ESPN's season projected PPG so
- * players who suffered early/season-ending injuries still carry their true
- * expected weekly value.
+ * A player's expected weekly points: his season scoring average across the
+ * games he played. Players who haven't played yet fall back to ESPN's season
+ * projection.
  */
-export function estimateExpectedPPG(player) {
-  const stats = player?.stats || [];
+export function estimateExpectedPPG(player, season) {
+  const stats = (player?.stats || []).filter((s) => inSeason(s, season));
   const sAct = stats.find((s) => s.scoringPeriodId === 0 && s.statSourceId === 0 && s.statSplitTypeId === 0);
   const sProj = stats.find((s) => s.scoringPeriodId === 0 && s.statSourceId === 1 && s.statSplitTypeId === 0);
 
@@ -248,7 +252,6 @@ export function estimateExpectedPPG(player) {
   const rawGp = Number(sAct?.stats?.['210']) || 0;
   const gp = rawGp > 0 ? rawGp : actAvg > 0 ? Math.round((Number(sAct?.appliedTotal) || 0) / actAvg) : 0;
 
-  if (gp > 0 && projAvg > 0) return (gp * actAvg + PRIOR_GAMES * projAvg) / (gp + PRIOR_GAMES);
   if (gp > 0) return actAvg;
   return projAvg;
 }
@@ -260,7 +263,7 @@ export function estimateExpectedPPG(player) {
  * when the player's NFL team actually had a game that week — bye weeks omit it, which avoids
  * false positives even when a player changed NFL teams in a later season.
  */
-export function normalizeRosters(rawByWeek, teamIds) {
+export function normalizeRosters(rawByWeek, teamIds, season) {
   const allowed = teamIds ? new Set(teamIds) : null;
   const byWeek = new Map();
 
@@ -277,7 +280,9 @@ export function normalizeRosters(rawByWeek, teamIds) {
         const isIR = slot === IR_SLOT;
         const isStarter = slot !== BENCH_SLOT && !isIR;
 
-        const wAct = (player.stats || []).find((s) => s.scoringPeriodId === week && s.statSourceId === 0);
+        const wAct = (player.stats || []).find(
+          (s) => s.scoringPeriodId === week && s.statSourceId === 0 && inSeason(s, season)
+        );
         const played = (Number(wAct?.stats?.['210']) || 0) >= 1 || (Number(wAct?.appliedTotal) || 0) !== 0;
         const weekProTeamId = wAct?.proTeamId ?? player.proTeamId ?? 0;
         const missed = Boolean(wAct) && !played && (weekProTeamId > 0 || isIR);
@@ -292,7 +297,7 @@ export function normalizeRosters(rawByWeek, teamIds) {
           isIR,
           played,
           missed,
-          expectedPPG: Math.max(0, estimateExpectedPPG(player)),
+          expectedPPG: Math.max(0, estimateExpectedPPG(player, season)),
         });
       }
       teamMap.set(team.id, entries);
@@ -412,7 +417,7 @@ export async function loadLeagueRosters(leagueId, season, weeks, teamIds) {
       'ESPN may not have archived weekly rosters for older seasons.'
     );
   }
-  const rosters = normalizeRosters(rawByWeek, teamIds);
+  const rosters = normalizeRosters(rawByWeek, teamIds, Number(season));
 
   const released = findReleasedPlayers(rosters);
   if (released.length) {

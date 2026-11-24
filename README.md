@@ -15,7 +15,7 @@ browser. No server, no accounts, no data leaves the page.
 | **Week-by-week grid** | A heat-mapped team × week matrix. Each cell is that team's record against the entire league that week, with a colored edge showing whether they actually won or lost. Includes a per-week drill-down. |
 | **Schedule swap** | A full round-robin: what every team's record would be playing every *other* team's schedule. The diagonal is their real season. Also ranks which schedule was easiest. |
 | **Power rankings** | Cumulative all-play win percentage converted to a weekly power rank, drawn as a line chart plus a rank table. |
-| **Injuries** | Season-long injury impact per team: non-bye missed player-weeks, replacement-adjusted **expected lost points** (weighing star injuries over bench depth), a team × week matrix, per-team injury logs, and the league's costliest single injuries. |
+| **Injuries** | Season-long injury impact per team: non-bye missed player-weeks, **lost points** at each player's season average, an above-replacement figure, a team × week matrix, per-team injury logs, and the league's costliest single injuries. |
 
 Results are shareable — the URL updates with the league, season, and active tab, e.g.
 `#league=203836968&season=2024&tab=swap`.
@@ -31,13 +31,13 @@ Results are shareable — the URL updates with the league, season, and active ta
 - **Strength of schedule** — the average all-play strength of the opponents you actually faced.
 - **Schedule swap** — a team's weekly scores are replayed against another team's opponents. When the
   borrowed schedule would have a team face itself, it faces the schedule's owner instead.
-- **Expected lost points (Injuries)** — for every non-bye missed game on a team's weekly roster, a
-  player's healthy expected PPG (blending their healthy season average with ESPN's preseason
-  projection) is compared against the weakest eligible starter who filled in. Losing a top-10 QB or
-  RB1 costs far more than losing bench depth that wouldn't have started.
+- **Lost points (Injuries)** — every non-bye game a rostered player misses costs his team his
+  season scoring average for that week (ESPN's projection if he hasn't played yet). The
+  **Above repl.** column subtracts the weakest eligible starter who filled in, so bench depth that
+  wouldn't have started counts as 0.
 - **Released while injured (Injuries)** — dropping an injured player doesn't erase the loss. When a
-  released player misses his next non-bye game, the team that released him keeps losing his expected
-  points (above the weakest eligible starter) every week he stays out, until he plays again or the
+  released player misses his next non-bye game, the team that released him keeps losing his season
+  average every week he stays out, until he plays again or the
   team re-adds him. Healthy releases are never charged. These weeks are shown in the **After release**
   column and flagged in the injury logs.
 
@@ -81,7 +81,7 @@ index.html      markup and the five tab panels
 styles.css      all styling
 js/espn.js      fetches the ESPN API and normalizes a season into teams, weekly scores, and rosters
 js/sim.js       all the math: all-play, luck, schedule swaps, power rankings
-js/injuries.js  season-long injury impact and replacement-adjusted expected lost points
+js/injuries.js  season-long injury impact, season-average and above-replacement lost points
 js/chart.js     dependency-free SVG line chart
 js/app.js       rendering, tabs, URL state
 ```

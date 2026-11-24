@@ -1,6 +1,6 @@
-import { loadLeague, loadLeagueRosters, EspnError } from './espn.js?v=2';
+import { loadLeague, loadLeagueRosters, EspnError } from './espn.js?v=3';
 import { buildAnalysis, formatRecord } from './sim.js';
-import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js?v=2';
+import { buildInjuryAnalysis, formatWeekRanges } from './injuries.js?v=3';
 import { renderRankChart, teamColor } from './chart.js';
 
 const DEFAULT_SEASON = 2026;
@@ -563,7 +563,7 @@ function renderInjuries() {
   host.appendChild(
     cell(
       'p',
-      'Tracks non-bye missed games across every team\'s weekly roster. <em>Exp. lost pts</em> measures actual lineup impact: each injured player\'s healthy expected PPG minus the weakest eligible starter who filled in (bench depth that wouldn\'t have started counts as 0).',
+      'Tracks non-bye missed games across every team\'s weekly roster. <em>Exp. lost pts</em> measures actual lineup impact: each injured player\'s healthy expected PPG minus the weakest eligible starter who filled in (bench depth that wouldn\'t have started counts as 0). Players a team <em>released while injured</em> keep costing that team every week they stay out, so dropping an injured star doesn\'t hide the loss.',
       { className: 'panel-note', html: true }
     )
   );
@@ -577,6 +577,7 @@ function renderInjuries() {
     { label: 'Total missed', title: 'Total rostered non-bye player-weeks missed (including bench depth)' },
     { label: 'Players', title: 'Distinct rostered players who missed at least one non-bye game' },
     { label: 'Gross pts', title: 'Unadjusted sum of healthy expected PPG for all missed player-weeks' },
+    { label: 'After release', title: 'Expected lost points from injured players the team released, for the weeks they stayed out after the release' },
     { label: 'Biggest loss', className: 'text-left', title: 'Single player who cost this team the most expected points' },
   ]);
 
@@ -601,6 +602,7 @@ function renderInjuries() {
     );
     tr.appendChild(cell('td', String(row.uniquePlayers), { className: 'mono' }));
     tr.appendChild(cell('td', num(row.grossLostPts), { className: 'mono muted' }));
+    tr.appendChild(cell('td', row.releasedLostPts >= 0.05 ? num(row.releasedLostPts) : '—', { className: 'mono' }));
 
     const big = row.biggestLoss;
     tr.appendChild(
@@ -695,6 +697,10 @@ function renderInjuryMatrix(inj) {
 
       const startedOut = wk.players.some((p) => p.isStarter);
       const lines = wk.players.map((p) => {
+        if (p.released) {
+          const vs = p.replacement ? ` vs ${p.replacement.name} (${num(p.replacement.expectedPPG)})` : '';
+          return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — released while injured${vs} -> -${num(p.netLost)}`;
+        }
         if (p.isStarter) return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) — started while out (-${num(p.netLost)})`;
         if (p.replacement) {
           return `${p.name} (${p.position}, ${num(p.expectedPPG)} PPG) vs ${p.replacement.name} (${num(p.replacement.expectedPPG)}) -> -${num(p.netLost)}`;
@@ -776,7 +782,11 @@ function renderTeamInjuryBreakdown(inj) {
       posTd.className = 'text-left';
       posTd.appendChild(cell('span', p.position, { className: 'pos-pill' }));
       tr.appendChild(posTd);
-      tr.appendChild(cell('td', formatWeekRanges(p.weeks), { className: 'mono text-left muted' }));
+      tr.appendChild(
+        cell('td', `${formatWeekRanges(p.weeks)}${p.releasedWeeks ? ` (${p.releasedWeeks}w after release)` : ''}`, {
+          className: 'mono text-left muted',
+        })
+      );
       tr.appendChild(cell('td', String(p.weeksMissed), { className: 'mono' }));
       tr.appendChild(cell('td', String(p.impactWeeks), { className: 'mono' }));
       tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
@@ -829,7 +839,13 @@ function renderCostliestInjuries(inj) {
     posTd.appendChild(cell('span', p.position, { className: 'pos-pill' }));
     tr.appendChild(posTd);
     tr.appendChild(teamCell({ id: p.teamId, team: p.team }));
-    tr.appendChild(cell('td', `${p.weeksMissed}w (${formatWeekRanges(p.weeks)})`, { className: 'mono text-left muted' }));
+    tr.appendChild(
+      cell(
+        'td',
+        `${p.weeksMissed}w (${formatWeekRanges(p.weeks)})${p.releasedWeeks ? ` · ${p.releasedWeeks}w after release` : ''}`,
+        { className: 'mono text-left muted' }
+      )
+    );
     tr.appendChild(cell('td', num(p.expectedPPG), { className: 'mono' }));
     tr.appendChild(
       cell('td', num(p.netLostPts), {

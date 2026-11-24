@@ -35,6 +35,11 @@ Results are shareable — the URL updates with the league, season, and active ta
   player's healthy expected PPG (blending their healthy season average with ESPN's preseason
   projection) is compared against the weakest eligible starter who filled in. Losing a top-10 QB or
   RB1 costs far more than losing bench depth that wouldn't have started.
+- **Released while injured (Injuries)** — dropping an injured player doesn't erase the loss. When a
+  released player misses his next non-bye game, the team that released him keeps losing his expected
+  points (above the weakest eligible starter) every week he stays out, until he plays again or the
+  team re-adds him. Healthy releases are never charged. These weeks are shown in the **After release**
+  column and flagged in the injury logs.
 
 Only **completed regular-season weeks** are counted. Playoff and consolation games are excluded, and
 any week that has not been fully scored is skipped so every view uses the same sample.

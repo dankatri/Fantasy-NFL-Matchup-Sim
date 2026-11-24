@@ -25,10 +25,10 @@ function query() {
   return VIEWS.map((v) => `view=${encodeURIComponent(v)}`).join('&');
 }
 
-async function readJson(url) {
+async function readJson(url, headers) {
   let res;
   try {
-    res = await fetch(url, { credentials: 'omit' });
+    res = await fetch(url, { credentials: 'omit', ...(headers ? { headers } : {}) });
   } catch (err) {
     throw new EspnError(
       'Could not reach the ESPN API.',
@@ -303,6 +303,103 @@ export function normalizeRosters(rawByWeek, teamIds) {
   return byWeek;
 }
 
+/**
+ * Find players a team released without them landing on any other roster the
+ * following week. Returns one record per (team, player) release with the
+ * player's last rostered snapshot, so a later lookup can decide whether the
+ * release happened during an injury.
+ */
+export function findReleasedPlayers(rostersByWeek) {
+  const weeks = [...rostersByWeek.keys()].sort((a, b) => a - b);
+  const released = [];
+
+  for (let i = 0; i < weeks.length - 1; i++) {
+    const week = weeks[i];
+    const next = rostersByWeek.get(weeks[i + 1]);
+    const rosteredNext = new Set([...next.values()].flatMap((entries) => entries.map((e) => e.playerId)));
+
+    for (const [teamId, entries] of rostersByWeek.get(week)) {
+      for (const entry of entries) {
+        if (!rosteredNext.has(entry.playerId)) {
+          released.push({ teamId, playerId: entry.playerId, lastWeek: week, entry });
+        }
+      }
+    }
+  }
+  return released;
+}
+
+/**
+ * Charge a team for injured players it released. A release counts only when
+ * the player misses his next non-bye game; the team then keeps losing his
+ * expected points every week he stays out, until he plays again or the team
+ * re-adds him. Byes are skipped. Healthy releases are never charged.
+ *
+ * gamesByPlayer: Map<playerId, Map<week, played:boolean>>; a missing week is a bye.
+ */
+export function applyInjuredReleases(rostersByWeek, released, gamesByPlayer) {
+  const weeks = [...rostersByWeek.keys()].sort((a, b) => a - b);
+
+  for (const rel of released) {
+    const games = gamesByPlayer.get(rel.playerId);
+    if (!games) continue;
+
+    for (const week of weeks) {
+      if (week <= rel.lastWeek) continue;
+      const teamEntries = rostersByWeek.get(week).get(rel.teamId);
+      if (!teamEntries || teamEntries.some((e) => e.playerId === rel.playerId)) break;
+      if (!games.has(week)) continue;
+      if (games.get(week)) break;
+
+      teamEntries.push({
+        ...rel.entry,
+        lineupSlotId: null,
+        isStarter: false,
+        isIR: false,
+        played: false,
+        missed: true,
+        released: true,
+      });
+    }
+  }
+  return rostersByWeek;
+}
+
+/** Map<playerId, Map<week, played>> from ESPN kona_player_info weekly stat records. */
+export function normalizePlayerGames(rawPlayers, season) {
+  const out = new Map();
+  for (const item of rawPlayers || []) {
+    const player = item?.player;
+    if (!player) continue;
+    const games = new Map();
+    for (const s of player.stats || []) {
+      if (s.seasonId !== season || s.statSourceId !== 0 || s.statSplitTypeId !== 1 || !s.scoringPeriodId) continue;
+      const played = (Number(s.stats?.['210']) || 0) >= 1 || (Number(s.appliedTotal) || 0) !== 0;
+      games.set(s.scoringPeriodId, (games.get(s.scoringPeriodId) || false) || played);
+    }
+    out.set(player.id, games);
+  }
+  return out;
+}
+
+async function fetchPlayerGames(leagueId, season, playerIds) {
+  const url = `${BASE}/seasons/${season}/segments/0/leagues/${leagueId}?view=kona_player_info`;
+  const ids = [...new Set(playerIds)];
+  const players = [];
+
+  for (let i = 0; i < ids.length; i += 50) {
+    const filter = {
+      players: {
+        filterIds: { value: ids.slice(i, i + 50) },
+        filterStatsForTopScoringPeriodIds: { value: 25, additionalValue: [`00${season}`] },
+      },
+    };
+    const data = await readJson(url, { 'X-Fantasy-Filter': JSON.stringify(filter) });
+    players.push(...(data?.players || []));
+  }
+  return normalizePlayerGames(players, Number(season));
+}
+
 /** Fetch and normalize weekly rosters for all completed regular-season weeks. */
 export async function loadLeagueRosters(leagueId, season, weeks, teamIds) {
   const pairs = await Promise.all(
@@ -315,5 +412,17 @@ export async function loadLeagueRosters(leagueId, season, weeks, teamIds) {
       'ESPN may not have archived weekly rosters for older seasons.'
     );
   }
-  return normalizeRosters(rawByWeek, teamIds);
+  const rosters = normalizeRosters(rawByWeek, teamIds);
+
+  const released = findReleasedPlayers(rosters);
+  if (released.length) {
+    try {
+      const games = await fetchPlayerGames(leagueId, season, released.map((r) => r.playerId));
+      applyInjuredReleases(rosters, released, games);
+    } catch (err) {
+      // Released-player history is a refinement; keep roster-only results if it fails.
+      console.warn('Could not load released player history', err);
+    }
+  }
+  return rosters;
 }

@@ -27,7 +27,8 @@ export function formatWeekRanges(weeks) {
 /**
  * Compute per-team and league-wide injury impact across all completed weeks.
  *
- * For each missed player-week (non-bye DNP on a team's roster):
+ * For each missed player-week (non-bye DNP on a team's roster, or a released
+ * player the team dropped while injured and who is still out):
  * - If left in a starting slot, the full expected PPG is lost.
  * - If moved to bench or IR, expected lost points is the gap between the injured
  *   player's healthy expected PPG and the weakest eligible starter the team had
@@ -49,6 +50,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
         startedWhileOut: 0,
         grossLostPts: 0,
         netLostPts: 0,
+        releasedLostPts: 0,
         byWeek: new Map(),
         playersById: new Map(),
       },
@@ -118,6 +120,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
         agg.netLostPts += netLost;
         weekNetLost += netLost;
         weekGrossLost += gross;
+        if (m.released) agg.releasedLostPts += netLost;
 
         weekEvents.push({
           playerId: m.playerId,
@@ -127,6 +130,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
           netLost,
           isStarter: m.isStarter,
           isIR: m.isIR,
+          released: Boolean(m.released),
           replacement,
         });
 
@@ -138,6 +142,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
             position: m.position,
             expectedPPG: m.expectedPPG,
             weeksMissed: 0,
+            releasedWeeks: 0,
             impactWeeks: 0,
             netLostPts: 0,
             grossLostPts: 0,
@@ -146,6 +151,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
           agg.playersById.set(m.playerId, pAgg);
         }
         pAgg.weeksMissed += 1;
+        if (m.released) pAgg.releasedWeeks += 1;
         if (netLost > EPS) pAgg.impactWeeks += 1;
         pAgg.netLostPts += netLost;
         pAgg.grossLostPts += gross;
@@ -178,6 +184,7 @@ export function buildInjuryAnalysis(league, rostersByWeek) {
       netLostPts: agg.netLostPts,
       netLostPerWeek: weekCount ? agg.netLostPts / weekCount : 0,
       grossLostPts: agg.grossLostPts,
+      releasedLostPts: agg.releasedLostPts,
       byWeek: agg.byWeek,
       players,
       biggestLoss: players[0] || null,

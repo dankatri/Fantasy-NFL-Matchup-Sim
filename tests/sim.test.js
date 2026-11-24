@@ -2,7 +2,15 @@
  * Edge-case tests for the normalizer and simulator.
  * Run with: node tests/sim.test.js   (no dependencies)
  */
-import { normalize, normalizeRosters, estimateExpectedPPG, EspnError } from '../js/espn.js';
+import {
+  normalize,
+  normalizeRosters,
+  estimateExpectedPPG,
+  findReleasedPlayers,
+  applyInjuredReleases,
+  normalizePlayerGames,
+  EspnError,
+} from '../js/espn.js';
 import { buildAnalysis, formatRecord } from '../js/sim.js';
 import { buildInjuryAnalysis, formatWeekRanges } from '../js/injuries.js';
 
@@ -288,6 +296,84 @@ suite('Injury edge cases: multiple same-slot injuries, started while out, 0-game
       { scoringPeriodId: 0, statSourceId: 1, statSplitTypeId: 0, appliedAverage: 20, appliedTotal: 340 },
     ],
   }) - 16) < 1e-9);
+}
+
+suite('Players released while injured keep costing the releasing team');
+{
+  const weeks = [1, 2, 3, 4, 5];
+  const league = normalize(
+    payload(named([1, 2]), weeks.map((w) => game(w, 1, 100, 2, 90)), weeks.length),
+    1,
+    2026
+  );
+
+  const qb = { pos: 1, eligibleSlots: [0, 20, 21] };
+  const wr = { pos: 3, eligibleSlots: [4, 20, 21] };
+  // Team 1: star QB (20 PPG) is out week 1 on IR, then released. Backup QB (12 PPG) starts.
+  // Team 2: releases a healthy WR after week 1 who keeps playing; that is not an injury.
+  const rawFor = (week) => ({
+    teams: [
+      {
+        id: 1,
+        roster: {
+          entries: [
+            ...(week === 1 ? [rosterEntry({ id: 11, name: 'Star QB', ...qb, slot: 21, week, played: false, seasonAvg: 20, projAvg: 0 })] : []),
+            rosterEntry({ id: 12, name: 'Backup QB', ...qb, slot: 0, week, played: true, seasonAvg: 12, projAvg: 12 }),
+          ],
+        },
+      },
+      {
+        id: 2,
+        roster: {
+          entries: [
+            ...(week === 1 ? [rosterEntry({ id: 21, name: 'Healthy WR', ...wr, slot: 20, week, played: true })] : []),
+            rosterEntry({ id: 22, name: 'Starter WR', ...wr, slot: 4, week, played: true }),
+          ],
+        },
+      },
+    ],
+  });
+
+  const rosters = normalizeRosters(new Map(weeks.map((w) => [w, rawFor(w)])), [1, 2]);
+  const released = findReleasedPlayers(rosters);
+  check('releases are detected for players on no roster the next week', released.length === 2, String(released.length));
+
+  // Star QB: out W2, bye W3, out W4, returns W5. Healthy WR plays W2.
+  const games = normalizePlayerGames(
+    [
+      {
+        player: {
+          id: 11,
+          stats: [
+            { seasonId: 2026, statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: 2, appliedTotal: 0 },
+            { seasonId: 2026, statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: 4, appliedTotal: 0 },
+            { seasonId: 2026, statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: 5, appliedTotal: 18, stats: { '210': 1 } },
+            // Another season's record for the same week must be ignored.
+            { seasonId: 2025, statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: 4, appliedTotal: 30, stats: { '210': 1 } },
+          ],
+        },
+      },
+      {
+        player: {
+          id: 21,
+          stats: [{ seasonId: 2026, statSourceId: 0, statSplitTypeId: 1, scoringPeriodId: 2, appliedTotal: 9, stats: { '210': 1 } }],
+        },
+      },
+    ],
+    2026
+  );
+  applyInjuredReleases(rosters, released, games);
+
+  const inj = buildInjuryAnalysis(league, rosters);
+  const t1 = inj.rowsById.get(1);
+  const t2 = inj.rowsById.get(2);
+  const star = t1.players.find((p) => p.id === 11);
+
+  check('injured release keeps counting non-bye weeks until the player returns', star.weeks.join() === '1,2,4', star.weeks.join());
+  check('weeks after release are flagged', star.releasedWeeks === 2, String(star.releasedWeeks));
+  check('released weeks are charged against the weakest eligible starter', Math.abs(t1.netLostPts - 24) < 1e-9, String(t1.netLostPts));
+  check('post-release loss is reported separately', Math.abs(t1.releasedLostPts - 16) < 1e-9, String(t1.releasedLostPts));
+  check('healthy releases are not charged', t2.missedWeeks === 0 && t2.releasedLostPts === 0);
 }
 
 console.log(failures ? `\n${failures} check(s) failed.\n` : '\nAll checks passed.\n');
